@@ -1,0 +1,373 @@
+import { test, expect, type Page } from '@playwright/test';
+import ExcelJS from 'exceljs';
+import { HyperFormula } from 'hyperformula';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const artifacts = path.resolve('artifacts');
+const records: { journey: string; evidence: string; expected: unknown; actual: unknown }[] = [];
+
+test.beforeAll(async () => {
+  await fs.mkdir(artifacts, { recursive: true });
+});
+test.afterAll(async () => {
+  await fs.writeFile(
+    path.join(artifacts, 'verification.json'),
+    JSON.stringify(
+      {
+        executedAt: new Date().toISOString(),
+        command: 'npm run build && npm run test:e2e',
+        fixture: 'Architect-defined Fixture A: $2/M input, $8/M output. Not provider prices.',
+        note: 'Workbook formulas independently recalculated with HyperFormula; Excel desktop UI was not automated.',
+        checks: records,
+      },
+      null,
+      2,
+    ),
+  );
+});
+
+async function addModel(page: Page, name = 'Fixture A', input = '2', output = '8', cache = '') {
+  await page.getByRole('button', { name: 'Model pricing', exact: true }).click();
+  await page.getByRole('button', { name: 'Add custom rates' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add custom model rates' });
+  await dialog.getByLabel('Custom model ID').fill(name);
+  await dialog.getByLabel('input USD / 1M', { exact: true }).fill(input);
+  await dialog.getByLabel('output USD / 1M', { exact: true }).fill(output);
+  if (cache) await dialog.getByLabel('cache read USD / 1M').fill(cache);
+  await dialog.getByRole('button', { name: 'Add model', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+}
+
+async function chooseModel(page: Page, locator: ReturnType<Page['getByRole']>, name = 'Fixture A') {
+  await locator.click();
+  const picker = page.getByRole('dialog', { name: 'Choose a model' });
+  await picker.getByLabel('Search models').fill(name);
+  await picker.getByRole('button', { name: new RegExp(`^${name} `) }).click();
+}
+
+async function setup(page: Page) {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Your agent suite, budgeted.' })).toBeVisible();
+  await page.getByLabel('Estimate name').fill('Mortgage fixture');
+  await addModel(page);
+  await page.getByRole('button', { name: 'Complexity profiles', exact: true }).click();
+  await chooseModel(page, page.getByRole('button', { name: 'Model: Select model', exact: true }).first());
+  await page.getByRole('button', { name: /Suite planner/ }).click();
+  await page.getByRole('button', { name: 'Quick setup', exact: true }).click();
+  const quick = page.getByRole('dialog', { name: 'Set up your agent suite' });
+  await quick.getByLabel('Total agent count').fill('2');
+  await quick.getByLabel('Simple agents', { exact: true }).fill('2');
+  await quick.getByLabel('Medium agents', { exact: true }).fill('0');
+  await quick.getByLabel('High agents', { exact: true }).fill('0');
+  await quick.getByRole('button', { name: 'Create suite' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+}
+
+async function recalculateWorkbook(file: string) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(file);
+  const sheets: Record<string, (string | number | boolean | null)[][]> = {};
+  workbook.eachSheet((sheet) => {
+    const grid: (string | number | boolean | null)[][] = [];
+    sheet.eachRow({ includeEmpty: true }, (row) => {
+      const cells: (string | number | boolean | null)[] = [];
+      for (let col = 1; col <= sheet.columnCount; col++) {
+        const v = row.getCell(col).value;
+        cells.push(
+          v && typeof v === 'object' && 'formula' in v
+            ? `=${v.formula}`
+            : typeof v === 'string'
+              ? `'${v}`
+              : typeof v === 'number' || typeof v === 'boolean'
+                ? v
+                : null,
+        );
+      }
+      grid.push(cells);
+    });
+    sheets[sheet.name] = grid;
+  });
+  const engine = HyperFormula.buildFromSheets(sheets, { licenseKey: 'gpl-v3' });
+  return { workbook, engine, summary: engine.getSheetId('Summary')! };
+}
+
+test('Budget, explicit scenarios, save/reopen, Excel formulas, reset and undo', async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on('pageerror', (e) => browserErrors.push(e.message));
+  await setup(page);
+  await expect(page.getByTestId('cost-low')).toHaveText('$12.24/mo');
+  await expect(page.getByTestId('cost-high')).toHaveText('$24.48/mo');
+
+  await page.getByRole('button', { name: 'Additional costs', exact: true }).click();
+  await page.getByRole('button', { name: 'Add cost item' }).click();
+  await page.getByLabel('Cost item', { exact: true }).fill('Storage');
+  await page.getByLabel('Unit cost (USD)').fill('25');
+  await page.getByRole('button', { name: 'Add cost item' }).click();
+  await page.getByLabel('Cost item', { exact: true }).nth(1).fill('Setup');
+  await page.getByLabel('Unit cost (USD)').nth(1).fill('100');
+  await page.getByLabel('Frequency').nth(1).selectOption('one-time');
+  await expect(page.locator('.totals-grid')).toContainText('$595.84');
+  await expect(page.locator('.totals-grid')).toContainText('$141.32');
+  await page.getByRole('button', { name: 'Save estimate', exact: true }).click();
+  await expect(page.locator('.alert.notice')).toContainText('saved on this computer');
+  await page.reload();
+  await page.getByRole('button', { name: /Open estimate/ }).click();
+  await page
+    .getByRole('dialog', { name: 'Saved estimates' })
+    .getByRole('button', { name: /Mortgage fixture/ })
+    .click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
+  const download = await downloadPromise;
+  const file = path.join(artifacts, 'mortgage-budget.xlsx');
+  await download.saveAs(file);
+  const { engine, summary, workbook } = await recalculateWorkbook(file);
+  const llm = [1, 2, 3].map((row) => engine.getCellValue({ sheet: summary, col: 1, row }));
+  expect(llm[0]).toBeCloseTo(12.24, 8);
+  expect(llm[1]).toBeCloseTo(16.32, 8);
+  expect(llm[2]).toBeCloseTo(24.48, 8);
+  expect(engine.getCellValue({ sheet: summary, col: 6, row: 2 })).toBeCloseTo(595.84, 8);
+  expect(workbook.getWorksheet('Pricing')!.getCell('A2').value).toBe('Fixture A');
+  // Editing a documented calculation input must propagate into the customer summary.
+  const calc = engine.getSheetId('Calculations')!;
+  engine.setCellContents({ sheet: calc, row: 4, col: 8 }, [[4000]]);
+  expect(engine.getCellValue({ sheet: summary, row: 2, col: 1 })).toBeCloseTo(24.48, 8);
+  records.push({
+    journey: 'Suite budget and Excel',
+    evidence: file,
+    expected: [12.24, 16.32, 24.48, 595.84],
+    actual: [...llm, 595.84],
+  });
+  engine.destroy();
+
+  await page.getByRole('button', { name: 'Scenarios', exact: true }).click();
+  const high = page
+    .locator('.scenario-editor-grid article')
+    .filter({ has: page.getByRole('heading', { name: 'High', exact: true }) });
+  await high.getByLabel('Invocation volume ×').fill('2');
+  await expect(page.getByTestId('cost-high')).toHaveText('$48.96/mo');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+
+  await page.getByRole('button', { name: 'Complexity profiles', exact: true }).click();
+  await page.getByLabel('Output tokens / call', { exact: true }).first().fill('1000');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$24.48/mo');
+  await page.getByRole('button', { name: 'Reset parameters', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Reset parameters', exact: true }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+  await expect(page.getByTestId('cost-high')).toHaveText('$24.48/mo');
+  await page.getByRole('button', { name: 'Undo last replacement / reset' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$24.48/mo');
+  await expect(page.getByTestId('cost-high')).toHaveText('$73.44/mo');
+  await page.getByRole('button', { name: /Suite planner/ }).click();
+  await page.screenshot({ path: path.join(artifacts, 'suite-desktop.png'), fullPage: true });
+  expect(browserErrors).toEqual([]);
+  records.push({
+    journey: 'Scenario edits, reset, undo',
+    evidence: 'UI plus suite-desktop.png',
+    expected: [24.48, 73.44],
+    actual: [24.48, 73.44],
+  });
+});
+
+test('Individual overrides, zero output, detailed replacement and incomplete prices', async ({ page }) => {
+  await setup(page);
+  await page.getByRole('button', { name: 'Edit Simple agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Customize one agent', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: 'Configure agent group' });
+  await editor.getByLabel('Output tokens / call', { exact: true }).fill('0');
+  await editor.getByRole('button', { name: 'Apply changes' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$12.24/mo');
+  await expect(page.locator('.count-chip')).toHaveText('2 agents');
+
+  await page.getByRole('button', { name: 'Edit Simple agents', exact: true }).click();
+  await page.getByRole('button', { name: 'Use detailed workflow' }).click();
+  await editor.getByLabel('Model calls / invocation', { exact: true }).fill('2');
+  await editor.getByLabel('Input tokens / call', { exact: true }).fill('1000');
+  await editor.getByLabel('Output tokens / call', { exact: true }).fill('250');
+  await editor.getByLabel('Additional attempt rate', { exact: true }).fill('0');
+  await editor.getByRole('button', { name: 'Apply changes' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$12.08/mo');
+  records.push({
+    journey: 'Split + zero override + detailed replacement',
+    evidence: 'Browser interactions',
+    expected: 12.08,
+    actual: 12.08,
+  });
+
+  await page.getByRole('button', { name: 'Edit Simple agents · individual', exact: true }).click();
+  await editor.getByLabel('Cached read fraction', { exact: true }).fill('0.5');
+  await editor.getByRole('button', { name: 'Apply changes' }).click();
+  await expect(page.locator('.scenario-card.featured')).toContainText('Incomplete');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$8.00/mo');
+  await expect(page.locator('.count-chip')).toHaveText('2 agents');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('button', { name: 'Export Excel', exact: true })).toBeVisible();
+  await page.screenshot({ path: path.join(artifacts, 'suite-mobile.png'), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('Spreadsheet import, literal text export, invalid import recovery and unpriced models', async ({
+  page,
+}) => {
+  await setup(page);
+  const fixture = new ExcelJS.Workbook();
+  const sheet = fixture.addWorksheet('Agents');
+  sheet.addRow([
+    'name',
+    'complexity',
+    'count',
+    'invocations',
+    'model_id',
+    'calls',
+    'input_tokens',
+    'output_tokens',
+    'retry_rate',
+  ]);
+  sheet.addRow(['=literal agent name', 'simple', 2, 1000, 'Fixture A', 1, 2000, 500, 0.02]);
+  const valid = path.join(artifacts, 'agent-import.xlsx');
+  await fixture.xlsx.writeFile(valid);
+  await page.getByLabel('Import agent spreadsheet').setInputFiles(valid);
+  await expect(page.getByRole('dialog', { name: 'Review spreadsheet import' })).toContainText('2 agents');
+  await page.getByRole('button', { name: 'Replace inventory' }).click();
+  await expect(page.getByRole('button', { name: '=literal agent name', exact: true })).toBeVisible();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
+  const exported = path.join(artifacts, 'literal-text-budget.xlsx');
+  await (await downloaded).saveAs(exported);
+  const safe = new ExcelJS.Workbook();
+  await safe.xlsx.readFile(exported);
+  expect(safe.getWorksheet('Calculations')!.getCell('B2').value).toBe('=literal agent name');
+
+  sheet.getCell('F2').value = { formula: '1+1' };
+  const invalid = path.join(artifacts, 'invalid-import.xlsx');
+  await fixture.xlsx.writeFile(invalid);
+  await page.getByLabel('Import agent spreadsheet').setInputFiles(invalid);
+  await expect(page.getByRole('dialog', { name: 'Review spreadsheet import' })).toContainText(
+    'formulas are not allowed',
+  );
+  await expect(page.getByRole('button', { name: 'Replace inventory' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+  sheet.getCell('F2').value = 1;
+  sheet.getCell('E2').value = 'unknown/provider-model';
+  const unknown = path.join(artifacts, 'unpriced-import.xlsx');
+  await fixture.xlsx.writeFile(unknown);
+  await page.getByLabel('Import agent spreadsheet').setInputFiles(unknown);
+  await page.getByRole('button', { name: 'Replace inventory' }).click();
+  await expect(page.locator('.scenario-card.featured')).toContainText('Incomplete');
+  await page.getByRole('button', { name: 'Undo last replacement / reset' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+  records.push({
+    journey: 'Spreadsheet import and recovery',
+    evidence: 'agent-import.xlsx, invalid-import.xlsx, literal-text-budget.xlsx',
+    expected: 'No partial mutation; names remain text; unpriced rows flagged',
+    actual: 'Verified through browser and exported workbook',
+  });
+  sheet.getCell('E2').value = 'Fixture A';
+  sheet.getCell('C2').value = 300;
+  sheet.getCell('D2').value = 100;
+  const large = path.join(artifacts, '300-agents-import.xlsx');
+  await fixture.xlsx.writeFile(large);
+  await page.getByLabel('Import agent spreadsheet').setInputFiles(large);
+  await page.getByRole('button', { name: 'Replace inventory' }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$244.80/mo');
+  await expect(page.locator('.count-chip')).toHaveText('300 agents');
+  records.push({
+    journey: 'Hundreds of agents',
+    evidence: '300-agents-import.xlsx',
+    expected: 244.8,
+    actual: 244.8,
+  });
+});
+
+test('Request-level tiers and cache partitions reconcile in the app and workbook', async ({
+  page,
+  request,
+}) => {
+  // Seed a saved architecture through the real API; all pricing is a frozen synthetic fixture.
+  const baseResponse = await request.get('/api/new');
+  const fixture = await baseResponse.json();
+  fixture.name = 'Tier and cache fixture';
+  fixture.prices['Tier Fixture'] = {
+    id: 'Tier Fixture',
+    provider: 'Synthetic provider',
+    input: '2',
+    output: '8',
+    cache_read: '0.5',
+    cache_write: '3',
+    tiers: [{ above: '200000', input: '4', output: '12', cache_read: '1', cache_write: '6' }],
+    max_input: null,
+    max_output: null,
+    source: 'Fixed E2E fixture; not provider prices',
+    retrieved_at: '2026-01-01T00:00:00Z',
+    custom: true,
+    unsupported: [],
+  };
+  fixture.profiles.simple = {
+    calls: '1',
+    input_tokens: '200000',
+    output_tokens: '1000',
+    retry_rate: '0',
+    cache_fraction: '0.25',
+    cache_write_fraction: '0.25',
+    model_id: 'Tier Fixture',
+  };
+  fixture.agents = [
+    {
+      id: 'tier-agent',
+      name: 'Tiered agent',
+      complexity: 'simple',
+      count: 1,
+      invocations: '10',
+      overrides: {},
+      steps: [],
+    },
+  ];
+  expect((await request.post('/api/estimates', { data: fixture })).ok()).toBe(true);
+  await fs.writeFile(path.join(artifacts, 'tier-cache-fixture.json'), JSON.stringify(fixture, null, 2));
+  await page.goto('/');
+  await page.getByRole('button', { name: /Open estimate/ }).click();
+  await page
+    .getByRole('dialog', { name: 'Saved estimates' })
+    .getByRole('button', { name: /Tier and cache fixture/ })
+    .click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$3.83/mo');
+  await expect(page.getByTestId('cost-low')).toHaveText('$2.87/mo');
+  await expect(page.getByTestId('cost-high')).toHaveText('$11.43/mo');
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
+  const exported = path.join(artifacts, 'tier-cache-budget.xlsx');
+  await (await download).saveAs(exported);
+  const { engine, summary } = await recalculateWorkbook(exported);
+  const actual = [1, 2, 3].map((row) => engine.getCellValue({ sheet: summary, col: 1, row }));
+  expect(actual[0]).toBeCloseTo(2.8725, 8);
+  expect(actual[1]).toBeCloseTo(3.83, 8);
+  expect(actual[2]).toBeCloseTo(11.43, 8);
+  engine.destroy();
+  records.push({
+    journey: 'Per-call context tiers + cache reads/writes',
+    evidence: exported,
+    expected: [2.8725, 3.83, 11.43],
+    actual,
+  });
+  await page.getByRole('button', { name: 'Edit Tiered agent', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: 'Configure agent group' });
+  await editor.getByLabel('Cached read fraction', { exact: true }).fill('0.9');
+  await editor.getByRole('button', { name: 'Apply changes' }).click();
+  await expect(editor.getByRole('alert')).toContainText('cannot exceed 100%');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$3.83/mo');
+  await editor.getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('button', { name: 'Scenarios', exact: true }).click();
+  const expected = page
+    .locator('.scenario-editor-grid article')
+    .filter({ has: page.getByRole('heading', { name: 'Expected', exact: true }) });
+  await expected.getByLabel('Invocation volume ×').fill('-1');
+  await expect(page.getByRole('alert')).toContainText('greater than or equal to 0');
+  await expect(page.getByRole('button', { name: 'Export Excel', exact: true })).toBeDisabled();
+  await expected.getByLabel('Invocation volume ×').fill('1');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$3.83/mo');
+});

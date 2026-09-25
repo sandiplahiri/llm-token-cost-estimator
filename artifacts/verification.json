@@ -1,0 +1,68 @@
+{
+  "executedAt": "2026-09-23T19:39:18.148Z",
+  "command": "npm run build && npm run test:e2e",
+  "fixture": "Architect-defined Fixture A: $2/M input, $8/M output. Not provider prices.",
+  "note": "Workbook formulas independently recalculated with HyperFormula; Excel desktop UI was not automated.",
+  "checks": [
+    {
+      "journey": "Suite budget and Excel",
+      "evidence": "/Users/sandiplahiri/llm/token-cost-estimator/artifacts/mortgage-budget.xlsx",
+      "expected": [
+        12.24,
+        16.32,
+        24.48,
+        595.84
+      ],
+      "actual": [
+        12.24,
+        16.32,
+        24.48,
+        595.84
+      ]
+    },
+    {
+      "journey": "Scenario edits, reset, undo",
+      "evidence": "UI plus suite-desktop.png",
+      "expected": [
+        24.48,
+        73.44
+      ],
+      "actual": [
+        24.48,
+        73.44
+      ]
+    },
+    {
+      "journey": "Split + zero override + detailed replacement",
+      "evidence": "Browser interactions",
+      "expected": 12.08,
+      "actual": 12.08
+    },
+    {
+      "journey": "Spreadsheet import and recovery",
+      "evidence": "agent-import.xlsx, invalid-import.xlsx, literal-text-budget.xlsx",
+      "expected": "No partial mutation; names remain text; unpriced rows flagged",
+      "actual": "Verified through browser and exported workbook"
+    },
+    {
+      "journey": "Hundreds of agents",
+      "evidence": "300-agents-import.xlsx",
+      "expected": 244.8,
+      "actual": 244.8
+    },
+    {
+      "journey": "Per-call context tiers + cache reads/writes",
+      "evidence": "/Users/sandiplahiri/llm/token-cost-estimator/artifacts/tier-cache-budget.xlsx",
+      "expected": [
+        2.8725,
+        3.83,
+        11.43
+      ],
+      "actual": [
+        2.8725,
+        3.83,
+        11.43
+      ]
+    }
+  ]
+}
