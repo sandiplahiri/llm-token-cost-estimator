@@ -2,7 +2,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 Amount = Annotated[Decimal, Field(ge=0, le=Decimal("1e15"), allow_inf_nan=False)]
 Ratio = Annotated[Decimal, Field(ge=0, le=1, allow_inf_nan=False)]
@@ -117,10 +117,18 @@ class Estimate(Record):
             raise ValueError("Agent row IDs must be unique.")
         if any(key != price.id for key, price in self.prices.items()):
             raise ValueError("Price snapshot keys must match their model IDs.")
-        for row in self.agents:
-            Execution(
-                **(self.profiles[row.complexity].model_dump() | row.overrides.model_dump(exclude_none=True))
-            )
+        for row_number, row in enumerate(self.agents, start=2):
+            try:
+                Execution(
+                    **(
+                        self.profiles[row.complexity].model_dump()
+                        | row.overrides.model_dump(exclude_none=True)
+                    )
+                )
+            except ValidationError as exc:
+                problem = exc.errors()[0]
+                field = ".".join(map(str, problem["loc"])) or "cache_fraction/cache_write_fraction"
+                raise ValueError(f"Row {row_number}, {field}: {problem['msg']}") from exc
         return self
 
 

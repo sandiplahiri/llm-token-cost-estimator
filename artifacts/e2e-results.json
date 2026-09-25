@@ -72,7 +72,7 @@
       "url": "http://127.0.0.1:8011/api/health",
       "reuseExistingServer": false,
       "env": {
-        "ESTIMATOR_DB": "artifacts/e2e-1790192346545.sqlite3"
+        "ESTIMATOR_DB": "artifacts/e2e-1790371456685.sqlite3"
       },
       "timeout": 30000
     }
@@ -100,12 +100,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 3698,
+                  "duration": 3795,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-23T19:39:07.560Z",
+                  "startTime": "2026-09-25T21:24:18.311Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -134,12 +134,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2260,
+                  "duration": 2320,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-23T19:39:11.662Z",
+                  "startTime": "2026-09-25T21:24:22.510Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -168,12 +168,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 2593,
+                  "duration": 3167,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-23T19:39:13.933Z",
+                  "startTime": "2026-09-25T21:24:24.843Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -202,12 +202,12 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "passed",
-                  "duration": 1608,
+                  "duration": 1601,
                   "errors": [],
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2026-09-23T19:39:16.531Z",
+                  "startTime": "2026-09-25T21:24:28.016Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -217,7 +217,75 @@
           ],
           "id": "bfff7a1deaa6eae76f63-910e8e9c981b7fd34292",
           "file": "budget.spec.ts",
-          "line": 287,
+          "line": 306,
+          "column": 1
+        },
+        {
+          "title": "Edits made during save and catalog refresh remain in the draft",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1867,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-25T21:24:29.628Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "bfff7a1deaa6eae76f63-8a036e89ab09e797869e",
+          "file": "budget.spec.ts",
+          "line": 394,
+          "column": 1
+        },
+        {
+          "title": "Bundled cache-hit pricing is used in the browser and exported workbook",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1590,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-25T21:24:31.505Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "bfff7a1deaa6eae76f63-2b50ad1cadfe2cdec46c",
+          "file": "budget.spec.ts",
+          "line": 455,
           "column": 1
         }
       ]
@@ -225,9 +293,9 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2026-09-23T19:39:06.558Z",
-    "duration": 11779.339,
-    "expected": 4,
+    "startTime": "2026-09-25T21:24:16.688Z",
+    "duration": 16631.436999999998,
+    "expected": 6,
     "skipped": 0,
     "unexpected": 0,
     "flaky": 0

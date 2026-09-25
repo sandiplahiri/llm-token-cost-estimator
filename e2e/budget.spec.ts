@@ -252,7 +252,25 @@ test('Spreadsheet import, literal text export, invalid import recovery and unpri
   await expect(page.getByRole('button', { name: 'Replace inventory' })).toBeDisabled();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
+  await page.getByRole('button', { name: 'Complexity profiles', exact: true }).click();
+  await page.getByLabel('Cached read fraction', { exact: true }).first().fill('0.8');
+  await page.getByRole('button', { name: /Suite planner/ }).click();
   sheet.getCell('F2').value = 1;
+  const cacheFixture = new ExcelJS.Workbook();
+  const cacheSheet = cacheFixture.addWorksheet('Agents');
+  cacheSheet.addRow([...sheet.getRow(1).values.slice(1), 'cache_write_fraction']);
+  cacheSheet.addRow([...sheet.getRow(2).values.slice(1), 0.3]);
+  const invalidCombination = path.join(artifacts, 'invalid-cache-import.xlsx');
+  await cacheFixture.xlsx.writeFile(invalidCombination);
+  await page.getByLabel('Import agent spreadsheet').setInputFiles(invalidCombination);
+  const cachePreview = page.getByRole('dialog', { name: 'Review spreadsheet import' });
+  await expect(cachePreview).toContainText('Row 2, cache_fraction/cache_write_fraction');
+  await expect(cachePreview.getByRole('button', { name: 'Replace inventory' })).toBeDisabled();
+  await cachePreview.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Complexity profiles', exact: true }).click();
+  await page.getByLabel('Cached read fraction', { exact: true }).first().fill('0');
+  await page.getByRole('button', { name: /Suite planner/ }).click();
+  await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
   sheet.getCell('E2').value = 'unknown/provider-model';
   const unknown = path.join(artifacts, 'unpriced-import.xlsx');
   await fixture.xlsx.writeFile(unknown);
@@ -263,8 +281,9 @@ test('Spreadsheet import, literal text export, invalid import recovery and unpri
   await expect(page.getByTestId('cost-expected')).toHaveText('$16.32/mo');
   records.push({
     journey: 'Spreadsheet import and recovery',
-    evidence: 'agent-import.xlsx, invalid-import.xlsx, literal-text-budget.xlsx',
-    expected: 'No partial mutation; names remain text; unpriced rows flagged',
+    evidence: 'agent-import.xlsx, invalid-import.xlsx, invalid-cache-import.xlsx, literal-text-budget.xlsx',
+    expected:
+      'No partial mutation; names remain text; invalid merged cache fractions identified at row 2; unpriced rows flagged',
     actual: 'Verified through browser and exported workbook',
   });
   sheet.getCell('E2').value = 'Fixture A';
@@ -370,4 +389,97 @@ test('Request-level tiers and cache partitions reconcile in the app and workbook
   await expect(page.getByRole('button', { name: 'Export Excel', exact: true })).toBeDisabled();
   await expected.getByLabel('Invocation volume ×').fill('1');
   await expect(page.getByTestId('cost-expected')).toHaveText('$3.83/mo');
+});
+
+test('Edits made during save and catalog refresh remain in the draft', async ({ page, request }) => {
+  await setup(page);
+  const notes = page.getByLabel('Customer assumptions & notes');
+  await notes.fill('Before save');
+  let releaseSave!: () => void;
+  let saveIntercepted!: () => void;
+  const saveGate = new Promise<void>((resolve) => (releaseSave = resolve));
+  const saveSeen = new Promise<void>((resolve) => (saveIntercepted = resolve));
+  await page.route('**/api/estimates', async (route) => {
+    if (route.request().method() === 'POST') {
+      saveIntercepted();
+      await saveGate;
+    }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Save estimate', exact: true }).click();
+  await saveSeen;
+  await notes.fill('Edited while saving');
+  releaseSave();
+  await expect(page.locator('.save-status')).toContainText('Browser draft');
+  await expect(page.locator('.alert.notice')).toContainText('recent edits still need to be saved');
+  const saved = await (await request.get('/api/estimates')).json();
+  const stored = await (await request.get(`/api/estimates/${saved[0].id}`)).json();
+  expect(stored.notes).toBe('Before save');
+  await page.unroute('**/api/estimates');
+
+  let releaseRefresh!: () => void;
+  let refreshIntercepted!: () => void;
+  const refreshGate = new Promise<void>((resolve) => (releaseRefresh = resolve));
+  const refreshSeen = new Promise<void>((resolve) => (refreshIntercepted = resolve));
+  await page.route('**/api/catalog/refresh', async (route) => {
+    refreshIntercepted();
+    await refreshGate;
+    await route.fulfill({
+      json: {
+        prices: {},
+        retrieved_at: '2026-01-01T00:00:00Z',
+        source: 'Fixed E2E refresh fixture',
+        skipped: 0,
+        scope: 'Text token pricing',
+      },
+    });
+  });
+  await page.getByRole('button', { name: 'Model pricing', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh catalog' }).click();
+  await refreshSeen;
+  await notes.fill('Edited while refreshing');
+  releaseRefresh();
+  const preview = page.getByRole('dialog', { name: 'Review refreshed pricing' });
+  await expect(preview).toBeVisible();
+  await preview.getByRole('button', { name: 'Apply refreshed prices' }).click();
+  await expect(notes).toHaveValue('Edited while refreshing');
+  await expect(page.locator('.save-status')).toContainText('Browser draft');
+  records.push({
+    journey: 'Concurrent draft edits during save and refresh',
+    evidence: 'Browser interactions and saved estimate API',
+    expected: ['Before save', 'Edited while refreshing', 'Browser draft'],
+    actual: [stored.notes, await notes.inputValue(), await page.locator('.save-status').innerText()],
+  });
+});
+
+test('Bundled cache-hit pricing is used in the browser and exported workbook', async ({ page, request }) => {
+  const catalog = await (await request.get('/api/catalog')).json();
+  const model = catalog.prices['deepseek/deepseek-coder'];
+  expect(Number(model.input)).toBeCloseTo(0.14, 8);
+  expect(Number(model.output)).toBeCloseTo(0.28, 8);
+  expect(Number(model.cache_read)).toBeCloseTo(0.014, 8);
+  await setup(page);
+  await page.getByRole('button', { name: 'Complexity profiles', exact: true }).click();
+  await chooseModel(
+    page,
+    page.getByRole('button', { name: 'Model: Fixture A', exact: true }).first(),
+    'deepseek/deepseek-coder',
+  );
+  await page.getByLabel('Cached read fraction', { exact: true }).first().fill('0.5');
+  await expect(page.getByTestId('cost-expected')).toHaveText('$0.60/mo');
+  await expect(page.locator('.scenario-card.featured')).not.toContainText('Incomplete');
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
+  const exported = path.join(artifacts, 'cache-hit-budget.xlsx');
+  await (await download).saveAs(exported);
+  const { engine, summary } = await recalculateWorkbook(exported);
+  const actual = engine.getCellValue({ sheet: summary, col: 1, row: 2 });
+  expect(actual).toBeCloseTo(0.59976, 8);
+  engine.destroy();
+  records.push({
+    journey: 'Bundled cache-hit price fallback',
+    evidence: exported,
+    expected: 0.59976,
+    actual,
+  });
 });

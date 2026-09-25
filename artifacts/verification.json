@@ -1,5 +1,5 @@
 {
-  "executedAt": "2026-09-23T19:39:18.148Z",
+  "executedAt": "2026-09-25T21:24:33.104Z",
   "command": "npm run build && npm run test:e2e",
   "fixture": "Architect-defined Fixture A: $2/M input, $8/M output. Not provider prices.",
   "note": "Workbook formulas independently recalculated with HyperFormula; Excel desktop UI was not automated.",
@@ -40,8 +40,8 @@
     },
     {
       "journey": "Spreadsheet import and recovery",
-      "evidence": "agent-import.xlsx, invalid-import.xlsx, literal-text-budget.xlsx",
-      "expected": "No partial mutation; names remain text; unpriced rows flagged",
+      "evidence": "agent-import.xlsx, invalid-import.xlsx, invalid-cache-import.xlsx, literal-text-budget.xlsx",
+      "expected": "No partial mutation; names remain text; invalid merged cache fractions identified at row 2; unpriced rows flagged",
       "actual": "Verified through browser and exported workbook"
     },
     {
@@ -63,6 +63,26 @@
         3.83,
         11.43
       ]
+    },
+    {
+      "journey": "Concurrent draft edits during save and refresh",
+      "evidence": "Browser interactions and saved estimate API",
+      "expected": [
+        "Before save",
+        "Edited while refreshing",
+        "Browser draft"
+      ],
+      "actual": [
+        "Before save",
+        "Edited while refreshing",
+        "Browser draft"
+      ]
+    },
+    {
+      "journey": "Bundled cache-hit price fallback",
+      "evidence": "/Users/sandiplahiri/llm/token-cost-estimator/artifacts/cache-hit-budget.xlsx",
+      "expected": 0.59976,
+      "actual": 0.59976
     }
   ]
 }

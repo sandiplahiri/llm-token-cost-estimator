@@ -10,6 +10,7 @@ from urllib.request import urlopen
 from .models import Price, Tier
 
 CATALOG_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+NORMALIZER_VERSION = 2
 PRICE_KEYS = {
     "input": "input_cost_per_token",
     "output": "output_cost_per_token",
@@ -30,6 +31,10 @@ def normalize(raw: dict, source: str) -> dict:
             def rate(key):
                 value = info.get(key)
                 return Decimal(str(value)) * 1000000 if value is not None else None
+
+            base_rates = {field: rate(key) for field, key in PRICE_KEYS.items()}
+            if base_rates["cache_read"] is None:
+                base_rates["cache_read"] = rate("input_cost_per_token_cache_hit")
 
             thresholds = sorted(
                 {
@@ -53,7 +58,7 @@ def normalize(raw: dict, source: str) -> dict:
             price = Price(
                 id=model_id,
                 provider=info.get("litellm_provider") or model_id.split("/")[0],
-                **{field: rate(key) for field, key in PRICE_KEYS.items()},
+                **base_rates,
                 tiers=tiers,
                 max_input=info.get("max_input_tokens"),
                 max_output=info.get("max_output_tokens"),
@@ -82,6 +87,7 @@ def normalize(raw: dict, source: str) -> dict:
         raise ValueError("The catalog did not contain any valid text-model pricing entries.")
     return {
         "prices": prices,
+        "normalizer_version": NORMALIZER_VERSION,
         "retrieved_at": now,
         "source": source,
         "skipped": skipped,

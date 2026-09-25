@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
   ArrowUpRight,
@@ -88,9 +88,18 @@ export default function App() {
   const [clearOverrides, setClearOverrides] = useState(true);
   const [quick, setQuick] = useState({ total: 10, simple: 6, medium: 3, high: 1, invocations: '1000' });
   const [imported, setImported] = useState<{ agents: AgentRow[]; errors: string[] } | null>(null);
-  const [refreshPreview, setRefreshPreview] = useState<{ estimate: Estimate; result: Results } | null>(null);
+  const [refreshPreview, setRefreshPreview] = useState<{
+    base: Estimate;
+    before: Results;
+    estimate: Estimate;
+    result: Results;
+  } | null>(null);
   const [search, setSearch] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const estimateRef = useRef(estimate);
+  useLayoutEffect(() => {
+    estimateRef.current = estimate;
+  }, [estimate]);
   const available = useMemo(
     () => ({ ...(catalog?.prices || emptyPrices), ...(estimate?.prices || emptyPrices) }),
     [catalog, estimate?.prices],
@@ -180,11 +189,17 @@ export default function App() {
   }
   async function save() {
     if (!estimate) return;
+    const saving = estimate;
     await perform('Saving', async () => {
-      await api('/estimates', estimate);
+      await api('/estimates', saving);
       setSaved(await api('/estimates'));
-      setIsSaved(true);
-      setNotice('Estimate and pricing snapshot saved on this computer.');
+      if (estimateRef.current === saving) {
+        setIsSaved(true);
+        setNotice('Estimate and pricing snapshot saved on this computer.');
+      } else {
+        setIsSaved(false);
+        setNotice('An earlier draft was saved. Your recent edits still need to be saved.');
+      }
     });
   }
   async function exportWorkbook() {
@@ -213,6 +228,26 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail);
+      if (!data.errors.length) {
+        let checked = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const base = estimateRef.current;
+          if (!base) throw new Error('The current estimate is unavailable. Try the import again.');
+          const proposed = clone(base);
+          proposed.agents = data.agents;
+          let validationError = '';
+          try {
+            await api('/calculate', proposed);
+          } catch (e) {
+            validationError = e instanceof Error ? e.message : String(e);
+          }
+          if (estimateRef.current !== base) continue;
+          if (validationError) data.errors = [validationError];
+          checked = true;
+          break;
+        }
+        if (!checked) throw new Error('The estimate changed during import preview. Try the import again.');
+      }
       setImported(data);
       setModal('import');
     });
@@ -834,11 +869,22 @@ export default function App() {
                       perform('Refreshing catalog', async () => {
                         const fresh = await api<Catalog>('/catalog/refresh', {});
                         setCatalog(fresh);
-                        const proposed = clone(estimate);
-                        for (const [key, p] of Object.entries(proposed.prices))
-                          if (!p.custom && fresh.prices[key]) proposed.prices[key] = fresh.prices[key];
-                        setRefreshPreview({ estimate: proposed, result: await api('/calculate', proposed) });
-                        setModal('refresh');
+                        for (let attempt = 0; attempt < 3; attempt++) {
+                          const base = estimateRef.current;
+                          if (!base) throw new Error('The current estimate is unavailable.');
+                          const proposed = clone(base);
+                          for (const [key, p] of Object.entries(proposed.prices))
+                            if (!p.custom && fresh.prices[key]) proposed.prices[key] = fresh.prices[key];
+                          const [before, after] = await Promise.all([
+                            api<Results>('/calculate', base),
+                            api<Results>('/calculate', proposed),
+                          ]);
+                          if (estimateRef.current !== base) continue;
+                          setRefreshPreview({ base, before, estimate: proposed, result: after });
+                          setModal('refresh');
+                          return;
+                        }
+                        throw new Error('The estimate changed during price preview. Try refresh again.');
                       })
                     }
                   >
@@ -1334,7 +1380,7 @@ export default function App() {
               <div key={s.name}>
                 <strong>{s.name}</strong>
                 <span>
-                  {money(result?.scenarios.find((old) => old.name === s.name)?.llm_cost || 0)} →{' '}
+                  {money(refreshPreview.before.scenarios.find((old) => old.name === s.name)?.llm_cost || 0)} →{' '}
                   {money(s.llm_cost)}
                   {!s.complete ? ' (partial)' : ''}
                 </span>
@@ -1348,7 +1394,14 @@ export default function App() {
             <button
               className="button dark"
               onClick={() => {
-                setUndo(clone(estimate));
+                if (estimateRef.current !== refreshPreview.base) {
+                  setModal(null);
+                  setError(
+                    'The estimate changed after the price preview. Refresh again to review current costs.',
+                  );
+                  return;
+                }
+                setUndo(clone(refreshPreview.base));
                 setEstimate(refreshPreview.estimate);
                 setIsSaved(false);
                 setModal(null);

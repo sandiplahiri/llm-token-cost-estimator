@@ -66,7 +66,10 @@ def health():
 @app.get("/api/catalog")
 def catalog():
     current = store.get_catalog()
-    if current is None:
+    if current is None or (
+        current.get("normalizer_version") != pricing.NORMALIZER_VERSION
+        and current.get("source", "").endswith(" bundled catalog")
+    ):
         current = pricing.bundled_catalog()
         store.save_catalog(current)
     return current
